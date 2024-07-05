@@ -17,10 +17,16 @@
 ## Monitoring Tools
 - evidently
 - langsmith -> paid service
-- weave / traces (wandb)
+- weave - evaluate (wandb platform) -> evaluate simple datasets
 - https://github.com/langfuse/langfuse
 - https://github.com/Arize-ai/phoenix
 
 ## RAG UI 
 - https://github.com/technologiestiftung/parla-frontend 
   - parla.berlin
+
+
+### Langfuse
+- Use evaluation pipelines to score a "session/trace/LLM-call" with Langchain Evaluators / RAGAS / UpTrain.
+  - https://langfuse.com/docs/scores/model-based-evals#evaluation-pipeline
+- 

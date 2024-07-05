@@ -1,5 +1,5 @@
 import dataclasses
-from typing import Any, Callable, Dict, List, Literal, Union
+from typing import Any, Callable, Dict, List, Literal, Union, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.language_models.llms import BaseLLM
@@ -40,6 +40,11 @@ AVATARS: Dict[Role, Any] = {"user": "🧐", "assistant": "🤖", "source": "📚
 class Message:
     role: Role
     content: str
+
+
+@dataclasses.dataclass
+class TracedMessage(Message):
+    trace_id: str
 
 
 @dataclasses.dataclass

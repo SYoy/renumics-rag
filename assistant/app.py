@@ -1,5 +1,6 @@
 from typing import Any, Callable, Dict, List, Optional, Type, Union, get_args
 
+import uuid
 import pandas as pd
 import streamlit as st
 import typer
@@ -36,10 +37,13 @@ from assistant.types import (
     Message,
     ModelType,
     NestedMessage,
+    TracedMessage,
     PredefinedRelevanceScoreFn,
     RelevanceScoreFn,
     RetrieverSearchType,
 )
+from assistant.tracing import langfuse_handler, TAGS, langfuse_client
+from langfuse.decorators import langfuse_context, observe
 
 app = typer.Typer()
 
@@ -61,7 +65,6 @@ HASH_FUNCS: Dict[Union[str, Type], Callable[[Any], Any]] = {
     HuggingFacePipeline: hash_model,
 }
 
-
 _get_llm = st.cache_resource(max_entries=1, show_spinner=False)(get_llm)
 _get_embeddings_model = st.cache_resource(max_entries=1, show_spinner=False)(
     get_embeddings_model
@@ -70,14 +73,14 @@ _get_embeddings_model = st.cache_resource(max_entries=1, show_spinner=False)(
 
 @st.cache_resource(show_spinner=False, hash_funcs=HASH_FUNCS)
 def _get_rag_chain(
-    llm: LLM,
-    relevance_score_fn: RelevanceScoreFn,
-    k: int,
-    search_type: RetrieverSearchType,
-    score_threshold: float,
-    fetch_k: int,
-    lambda_mult: float,
-    embeddings_model: Embeddings,
+        llm: LLM,
+        relevance_score_fn: RelevanceScoreFn,
+        k: int,
+        search_type: RetrieverSearchType,
+        score_threshold: float,
+        fetch_k: int,
+        lambda_mult: float,
+        embeddings_model: Embeddings,
 ) -> Runnable:
     vectorstore = get_chromadb(
         embeddings_model,
@@ -127,7 +130,7 @@ def get_or_create_spotlight_viewer() -> Any:
 
 
 def st_settings(
-    default_settings: Settings,
+        default_settings: Settings,
 ) -> None:
     st.header("Settings")
     st.subheader("LLM")
@@ -150,7 +153,7 @@ def st_settings(
             format_func=lambda x: PREDEFINED_RELEVANCE_SCORE_FNS.get(x, x),
             key="relevance_score_fn",
             help="Distance function in the embedding space "
-            "([more](https://docs.trychroma.com/usage-guide#changing-the-distance-function))",
+                 "([more](https://docs.trychroma.com/usage-guide#changing-the-distance-function))",
         )
         k = st.slider(
             "k",
@@ -215,6 +218,32 @@ def st_settings(
         )
 
 
+def _annotate_trace_tags(trace_id, widget_key: str):
+    tags = st.session_state[widget_key]
+    _to_set = {
+        tag: 1 if tag in tags else 0
+        for tag in TAGS
+    }
+
+    for key, value in _to_set.items():
+        langfuse_client.score(
+            trace_id=trace_id,
+            name=key,
+            value=bool(value),
+            id=widget_key + key
+        )
+
+
+def _annotate_trace_feedback(trace_id, value: bool):
+    langfuse_client.score(
+        trace_id=trace_id,
+        name="user_feedback",
+        value=bool(value),
+        session_id=st.session_state.session_id,
+        id="user_feedback"
+    )
+
+
 def st_chat_messages(messages: List[Message]) -> None:
     for message in messages:
         with st.chat_message(message.role, avatar=AVATARS.get(message.role)):
@@ -224,6 +253,20 @@ def st_chat_messages(messages: List[Message]) -> None:
                         st.write(content)
             else:
                 st.write(message.content)
+
+            if isinstance(message, TracedMessage):
+                tag, positive, negative = st.columns([16, 1, 1])
+
+                with tag:
+                    st.multiselect("Tag as:", TAGS, key=f"tag_{message.trace_id}", on_change=_annotate_trace_tags,
+                                   args=(message.trace_id, f"tag_{message.trace_id}"))
+
+                with positive:
+                    st.button("👍", key=f"like_{message.trace_id}", on_click=_annotate_trace_feedback,
+                              args=(message.trace_id, True))
+                with negative:
+                    st.button("👎", key=f"dislike_{message.trace_id}", on_click=_annotate_trace_feedback,
+                              args=(message.trace_id, False))
 
 
 def st_chat(on_question: Callable[[str], List[Message]]) -> None:
@@ -243,12 +286,14 @@ def st_chat(on_question: Callable[[str], List[Message]]) -> None:
 
 
 def st_app(
-    title: str = "RAG Demo",
-    favicon: str = "🤖",
-    image: Optional[str] = None,
-    h1: str = "RAG Demo",
-    h2: str = "Chat with your docs",
+        title: str = "RAG Demo",
+        favicon: str = "🤖",
+        image: Optional[str] = None,
+        h1: str = "RAG Demo",
+        h2: str = "Chat with your docs",
 ) -> None:
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = uuid.uuid4()
     st.set_page_config(
         page_title=title,
         page_icon=favicon,
@@ -302,8 +347,9 @@ def st_app(
         )
         questions_vectorstore = _get_questions_chromadb(embeddings_model)
 
+        @observe()
         def on_question(question: str) -> List[Message]:
-            rag_answer = chain.invoke(question)
+            rag_answer = chain.invoke(question, config={"callbacks": [langfuse_handler]})
 
             questions_vectorstore.add_documents([question_as_doc(question, rag_answer)])
             questions_vectorstore.persist()
@@ -314,7 +360,12 @@ def st_app(
                 sources.append(f"**Content**: {doc.page_content}")
                 sources.append(f"**Source**: \"{doc.metadata['source']}\"")
             messages.append(NestedMessage("source", "Sources", sources))
-            messages.append(Message("assistant", rag_answer["answer"]))
+            if langfuse_handler:
+                langfuse_context.update_current_trace(session_id=str(st.session_state.session_id))
+                messages.append(TracedMessage("assistant", rag_answer["answer"],
+                                              trace_id=langfuse_context.get_current_trace_id()))
+            else:
+                messages.append(Message("assistant", rag_answer["answer"]))
             return messages
 
         viewer = get_or_create_spotlight_viewer()
@@ -349,7 +400,6 @@ def st_app(
 
 
 app.command()(st_app)
-
 
 if __name__ == "__main__":
     app()
