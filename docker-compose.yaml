@@ -1,0 +1,44 @@
+services:
+  evidently:
+    image: evidently/evidently-service:0.4.30
+    container_name: evidently
+    ports:
+      - "5050:5050"
+    entrypoint: ["evidently", "ui", "--port", "5050", "--workspace", "workspace"]
+
+  langfuse-server:
+    image: langfuse/langfuse:latest
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - 3000:3000
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/postgres
+      - NEXTAUTH_SECRET=qkom1xkR7DX75gc3eur4ak6oHK6yTFsSpSDwwVoLoQY=
+      - SALT=cV1WMUy1yfZ3kdguiG6CAujw2UdCbmKzRS+4buAxFxI=
+      - NEXTAUTH_URL=http://127.0.0.1:3000
+      - TELEMETRY_ENABLED=false
+      - LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES=false
+    healthcheck:
+      test: ["CMD", "curl", "http://127.0.0.1:3000/api/public/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  db:
+    image: postgres
+    restart: always
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=postgres
+    ports:
+      - 5432:5432
+    volumes:
+      - /tmp/langfuse-pgdata:/var/lib/postgresql/data
