@@ -6,6 +6,7 @@ from langfuse.callback import CallbackHandler
 
 try:
     langfuse_handler = CallbackHandler(
+        trace_name="rag-answer",
         user_id=os.getenv("LANGFUSE_USER_ID", None),
     )
     langfuse_handler.auth_check()

@@ -255,18 +255,20 @@ def st_chat_messages(messages: List[Message]) -> None:
                 st.write(message.content)
 
             if isinstance(message, TracedMessage):
-                tag, positive, negative = st.columns([16, 1, 1])
+                tag, feedback = st.columns([16, 2])
 
                 with tag:
                     st.multiselect("Tag as:", TAGS, key=f"tag_{message.trace_id}", on_change=_annotate_trace_tags,
                                    args=(message.trace_id, f"tag_{message.trace_id}"))
+                with feedback:
+                    positive, negative = st.columns(2)
 
-                with positive:
-                    st.button("👍", key=f"like_{message.trace_id}", on_click=_annotate_trace_feedback,
-                              args=(message.trace_id, True))
-                with negative:
-                    st.button("👎", key=f"dislike_{message.trace_id}", on_click=_annotate_trace_feedback,
-                              args=(message.trace_id, False))
+                    with positive:
+                        st.button("👍", key=f"like_{message.trace_id}", on_click=_annotate_trace_feedback,
+                                  args=(message.trace_id, True))
+                    with negative:
+                        st.button("👎", key=f"dislike_{message.trace_id}", on_click=_annotate_trace_feedback,
+                                  args=(message.trace_id, False))
 
 
 def st_chat(on_question: Callable[[str], List[Message]]) -> None:
@@ -347,8 +349,9 @@ def st_app(
         )
         questions_vectorstore = _get_questions_chromadb(embeddings_model)
 
-        @observe()
         def on_question(question: str) -> List[Message]:
+            if langfuse_handler:
+                langfuse_handler.session_id = str(st.session_state.session_id)
             rag_answer = chain.invoke(question, config={"callbacks": [langfuse_handler]})
 
             questions_vectorstore.add_documents([question_as_doc(question, rag_answer)])
@@ -361,9 +364,9 @@ def st_app(
                 sources.append(f"**Source**: \"{doc.metadata['source']}\"")
             messages.append(NestedMessage("source", "Sources", sources))
             if langfuse_handler:
-                langfuse_context.update_current_trace(session_id=str(st.session_state.session_id))
                 messages.append(TracedMessage("assistant", rag_answer["answer"],
-                                              trace_id=langfuse_context.get_current_trace_id()))
+                                              trace_id=langfuse_handler.get_trace_id())
+                                )
             else:
                 messages.append(Message("assistant", rag_answer["answer"]))
             return messages
